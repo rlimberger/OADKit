@@ -17,6 +17,9 @@ class OADViewController: UIViewController {
     // current version of the target
     var currentVersion: String?
     
+    // product container
+    var productObject: Product?
+    
     // the firmware image to work with
     var img: FirmwareImage?
     
@@ -41,6 +44,15 @@ class OADViewController: UIViewController {
     
     override func viewDidLoad() {
         super.viewDidLoad()
+        
+        if let product = product, currentVersion = currentVersion, obj = OADManager.sharedManager.newFirmwareVersion(product, currentVersion: currentVersion) {
+            productObject = obj
+            updateButton.enabled = true
+            textView.text = "A new version (" + obj.fimrwareVersion + ") is available for " + product + "!\n"
+        } else {
+            updateButton.enabled = false
+            textView.text = "You are on the latest version of the firmware (" + (currentVersion ?? "unknown") + ")."
+        }
         
         NSNotificationCenter.defaultCenter().addObserver(self, selector: #selector(didWriteValueForCharacteristic(_:)), name: "didWriteValueForCharacteristic", object: nil)
         NSNotificationCenter.defaultCenter().addObserver(self, selector: #selector(didUpdateValueForCharacteristic(_:)), name: "didUpdateValueForCharacteristic", object: nil)
@@ -80,50 +92,6 @@ class OADViewController: UIViewController {
         presentViewController(alert, animated: true, completion: nil)
     }
     
-    class func firmwareURL(product: String) -> NSURL? {
-        if let resourceURL = NSBundle.mainBundle().resourceURL {
-            let firmwareURL = resourceURL.URLByAppendingPathComponent("firmware")
-            let productURL = firmwareURL.URLByAppendingPathComponent(product)
-            
-            return productURL
-        }
-        
-        return nil
-    }
-    
-    class func versionInfoDictForProduct(product: String) -> Dictionary<String, AnyObject>? {
-        if let productURL = firmwareURL(product) {
-            let versionPlistURL = productURL.URLByAppendingPathComponent("version.plist")
-            
-            return NSDictionary(contentsOfURL: versionPlistURL) as? Dictionary<String, AnyObject>
-        }
-        
-        return nil
-    }
-    
-    class func newFirmwareVersion(product: String?, currentVersion: String) -> String? {
-        if let product = product, versionInfoDict = versionInfoDictForProduct(product), version = versionInfoDict["version"] as? String {
-            if version.compare(currentVersion, options: .NumericSearch, range: nil, locale: nil) == .OrderedDescending {
-                return version
-            }
-        }
-        
-        return nil
-    }
-    
-    class func firmwareImage(product: String?) -> FirmwareImage? {
-        if let product = product, url = OADViewController.firmwareURL(product)?.URLByAppendingPathComponent("fw.hex") {
-            do {
-                let fwString = try String(contentsOfURL: url)
-                return FirmwareImage(file: fwString)
-            } catch _ {
-                
-            }
-        }
-        
-        return nil
-    }
-    
     func didWriteValueForCharacteristic(notification: NSNotification) {
         guard let characteristic = notification.object as? CBCharacteristic, value = characteristic.value else {return}
         
@@ -137,7 +105,7 @@ class OADViewController: UIViewController {
     }
     
     func programmingTick(timer: NSTimer) {
-        guard let _ = startDate, img = img, uuid = uuid, peripheral = BTCentral.sharedCentral.peripherals[uuid], identifyChar = BTCentral.sharedCentral.characteristicsLookupTable[fxOADImgBlockUUID.UUIDString] else {
+        guard let _ = startDate, img = img, uuid = uuid, peripheral = BTCentral.sharedCentral.peripherals[uuid], identifyChar = BTCentral.sharedCentral.characteristicsLookupTable[peripheral.identifier.UUIDString]?[fxOADImgBlockUUID.UUIDString] else {
             timer.invalidate()
             showProgrammingErrorDialog("Something went wrong during block transfer setup.")
             return
@@ -258,7 +226,7 @@ class OADViewController: UIViewController {
     
     func showProgressDialog() {
         progressAlert?.dismissViewControllerAnimated(true, completion: nil)
-        let alert = UIAlertController(title: "Updating firmware", message: " ", preferredStyle: .Alert)
+        let alert = UIAlertController(title: "Updating firmware", message: "Downloading firmware image...", preferredStyle: .Alert)
         
         alert.addAction(UIAlertAction(title: "Cancel", style: .Cancel) {[weak self] (action) in
             self?.endProgramming()
@@ -282,13 +250,15 @@ class OADViewController: UIViewController {
         startDate = NSDate()
         
         // write image header to ident char to kick start the OAD process
-        if let peripheral = peripheral, identifyChar = BTCentral.sharedCentral.characteristicsLookupTable[fxOADImgIdentifyUUID.UUIDString], data = img?.imgIdentifyRequestData() {
+        if let peripheral = peripheral, identifyChar = BTCentral.sharedCentral.characteristicsLookupTable[peripheral.identifier.UUIDString]?[fxOADImgIdentifyUUID.UUIDString], data = img?.imgIdentifyRequestData() {
             peripheral.writeValue(data, forCharacteristic: identifyChar, type: CBCharacteristicWriteType.WithResponse)
             updateProgressStats()
         }
     }
     
     func endProgramming() {
+        progressAlert?.dismissViewControllerAnimated(true, completion: nil)
+        progressAlert = nil
         resetProgrammingStack()
     }
     
@@ -301,9 +271,11 @@ class OADViewController: UIViewController {
     func updateFirmware(peripheral: CBPeripheral?) {
         showProgressDialog()
         
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0)) {[weak self] in
-            self?.img = OADViewController.firmwareImage(self?.product)
-            self?.startProgramming(peripheral)
+        OADManager.sharedManager.fetchFirmwareImageAsync(productObject) {[weak self] (image) in
+            if self?.progressAlert != nil {
+                self?.img = image
+                self?.startProgramming(peripheral)
+            }
         }
     }
 
