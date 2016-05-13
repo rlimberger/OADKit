@@ -6,7 +6,7 @@
 import UIKit
 import CoreBluetooth
 
-class OADViewController: UIViewController {
+class OADViewController: UITableViewController {
     
     // uuid of the OAD target peripheral
     var uuid: String?
@@ -40,22 +40,72 @@ class OADViewController: UIViewController {
     let NUM_BLOCK_PER_CONNECTION = 4    // send 4, 16 byte blocks
     let BLOCK_TRANSFER_INTERVAL  = 0.03 // every 30ms
     
-    @IBOutlet weak var textView: UITextView!
-    
     override func viewDidLoad() {
         super.viewDidLoad()
         
-        if let product = product, currentVersion = currentVersion, obj = OADManager.sharedManager.newFirmwareVersion(product, currentVersion: currentVersion) {
-            productObject = obj
-            updateButton.enabled = true
-            textView.text = "A new version (" + obj.fimrwareVersion + ") is available for " + product + "!\n"
-        } else {
-            updateButton.enabled = false
-            textView.text = "You are on the latest version of the firmware (" + (currentVersion ?? "unknown") + ")."
+        if let prod = product {
+            productObject = OADManager.sharedManager.products[prod]
+            title = prod + " Firmware update"
         }
+        
+        UIApplication.sharedApplication().cancelAllLocalNotifications()
+        UIApplication.sharedApplication().applicationIconBadgeNumber = -1
         
         NSNotificationCenter.defaultCenter().addObserver(self, selector: #selector(didWriteValueForCharacteristic(_:)), name: "didWriteValueForCharacteristic", object: nil)
         NSNotificationCenter.defaultCenter().addObserver(self, selector: #selector(didUpdateValueForCharacteristic(_:)), name: "didUpdateValueForCharacteristic", object: nil)
+    }
+    
+    override func numberOfSectionsInTableView(tableView: UITableView) -> Int {
+        
+        if let prod = productObject where prod.sortedVersions.count > 1 {
+            return 2
+        }
+        
+        return 1
+    }
+    
+    override func tableView(tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        if section == 0 {
+            return 1
+        } else {
+            return (productObject?.sortedVersions.count ?? 1) - 1
+        }
+    }
+    
+    override func tableView(tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        if section == 0 {
+            return "Latest version"
+        } else {
+            return "Previous versions"
+        }
+    }
+    
+    override func tableView(tableView: UITableView, cellForRowAtIndexPath indexPath: NSIndexPath) -> UITableViewCell {
+        guard let prod = productObject, cell = tableView.dequeueReusableCellWithIdentifier("VersionCell") else { return UITableViewCell() }
+        
+        var version: FirmwareVersion?
+        if indexPath.section == 0 {
+            version = prod.sortedVersions.first
+        } else {
+            version = prod.sortedVersions[indexPath.row+1]
+        }
+        
+        if let version = version {
+            cell.textLabel?.text = version.version
+            
+            let formatter = NSDateFormatter()
+            formatter.dateStyle = .MediumStyle
+            formatter.timeStyle = .NoStyle
+            cell.detailTextLabel?.text = formatter.stringFromDate(version.date)
+            
+            if let currentVersion = currentVersion where version.version == currentVersion {
+                cell.accessoryType = . Checkmark
+            } else {
+                cell.accessoryType = .DisclosureIndicator
+            }
+        }
+        
+        return cell
     }
     
     @IBAction func done() {
@@ -68,26 +118,28 @@ class OADViewController: UIViewController {
         NSNotificationCenter.defaultCenter().removeObserver(self)
     }
     
-    @IBAction func update() {
-        showUpdateConfirmAlert()
+    override func tableView(tableView: UITableView, didSelectRowAtIndexPath indexPath: NSIndexPath) {
+        tableView.deselectRowAtIndexPath(indexPath, animated: true)
+        
+        if let productObject = productObject where indexPath.row < productObject.sortedVersions.count {
+            showUpdateConfirmAlert(productObject.sortedVersions[indexPath.row])
+        }
     }
     
-    func showUpdateConfirmAlert() {
+    func showUpdateConfirmAlert(version: FirmwareVersion) {
         
-        let title = "Are you sure you want to start the firmware update?"
-        let message = "Make sure your battery is fully charged and do not disconnect the battery during this process!"
+        let title = "Start firmware update to version \(version.version)?"
+        let message = "This may take a few minutes."
         
         let alert = UIAlertController(title: title, message: message, preferredStyle: .Alert)
         
         alert.addAction(UIAlertAction(title: "Update", style: .Destructive, handler: {[weak self] (action) in
-            self?.updateFirmware(BTCentral.sharedCentral.peripherals[self?.uuid ?? " "])
+            self?.updateFirmware(BTCentral.sharedCentral.peripherals[self?.uuid ?? " "], version: version)
         }))
         
-        alert.addAction(UIAlertAction(title: "Remind me later", style: .Default, handler: {(action) in
-                // TODO: reminder
-        }))
-        
-        alert.addAction(UIAlertAction(title: "Cancel", style: .Cancel, handler: nil))
+        let cancelAction = UIAlertAction(title: "Cancel", style: .Cancel, handler: nil)
+        alert.addAction(cancelAction)
+        alert.preferredAction = cancelAction
         
         presentViewController(alert, animated: true, completion: nil)
     }
@@ -202,10 +254,9 @@ class OADViewController: UIViewController {
     func showProgrammingErrorDialog(message: String? = nil) {
         blockTransferTimer?.invalidate()
         
-        let alert = UIAlertController(title: "Firmware update failed!", message: message, preferredStyle: .Alert)
-        alert.addAction(UIAlertAction(title: "Ok", style: .Default, handler: nil))
-        
         dispatch_async(dispatch_get_main_queue()) {[weak self] in
+            let alert = UIAlertController(title: "Firmware update failed!", message: message, preferredStyle: .Alert)
+            alert.addAction(UIAlertAction(title: "Ok", style: .Default, handler: nil))
             self?.progressAlert?.dismissViewControllerAnimated(true, completion: nil)
             self?.presentViewController(alert, animated: true, completion: nil)
         }
@@ -214,11 +265,11 @@ class OADViewController: UIViewController {
     func showProgrammingDoneDialog() {
         blockTransferTimer?.invalidate()
         
-        let alert = UIAlertController(title: "Firmware update complete!", message: "The device will turn off now. When you turn it back on, it will perform the firmware update post process.", preferredStyle: .Alert)
-        
-        alert.addAction(UIAlertAction(title: "Ok", style: .Cancel, handler: nil))
-        
         dispatch_async(dispatch_get_main_queue()) {[weak self] in
+            let alert = UIAlertController(title: "Firmware update complete!", message: "The device will turn off now. When you turn it back on, it will perform the firmware update post process.", preferredStyle: .Alert)
+        
+            alert.addAction(UIAlertAction(title: "Ok", style: .Cancel, handler: nil))
+        
             self?.progressAlert?.dismissViewControllerAnimated(true, completion: nil)
             self?.presentViewController(alert, animated: true, completion: nil)
         }
@@ -226,7 +277,7 @@ class OADViewController: UIViewController {
     
     func showProgressDialog() {
         progressAlert?.dismissViewControllerAnimated(true, completion: nil)
-        let alert = UIAlertController(title: "Updating firmware", message: "Downloading firmware image...", preferredStyle: .Alert)
+        let alert = UIAlertController(title: "Updating firmware", message: "Getting new firmware from iCloud...", preferredStyle: .Alert)
         
         alert.addAction(UIAlertAction(title: "Cancel", style: .Cancel) {[weak self] (action) in
             self?.endProgramming()
@@ -268,11 +319,14 @@ class OADViewController: UIViewController {
         img?.resetProgress()
     }
     
-    func updateFirmware(peripheral: CBPeripheral?) {
+    func updateFirmware(peripheral: CBPeripheral?, version: FirmwareVersion) {
         showProgressDialog()
         
-        OADManager.sharedManager.fetchFirmwareImageAsync(productObject) {[weak self] (image) in
+        OADManager.sharedManager.fetchFirmwareImageAsync(version) {[weak self] (image) in
             if self?.progressAlert != nil {
+                dispatch_async(dispatch_get_main_queue()) {[weak self] in
+                    self?.progressAlert?.message = "Starting Bluetooth upload..."
+                }
                 self?.img = image
                 self?.startProgramming(peripheral)
             }
