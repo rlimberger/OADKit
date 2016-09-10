@@ -153,7 +153,7 @@ class FirmwareImage : NSObject {
                 }
                 
                 // this is not the first address, check if we need to padd
-                if let currentAddress = currentAddress where currentAddress != blockAddr {
+                if let currentAddress = currentAddress where currentAddress < blockAddr {
                     //print("gap:", String(format: "0x%04x", currentAddress), "->",String(format: "0x%04x", blockAddr))
                     let numPadBytes = Int(blockAddr-currentAddress)
                     let padData = [UInt8](count: numPadBytes, repeatedValue: 0xFF)
