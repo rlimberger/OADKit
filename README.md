@@ -15,7 +15,7 @@ OAD has 3 basic steps:
     2. write the firmware image (in 16 byte chunks)
     3. reset the target so that the BIM can copy the new firmware image to internal flash.
     
-## How to use these classes
+## How to use this class
 The FirmwareImage class assumes to be constructed with a string, that is essenctially the hex file that was produced as a result of hexmerge.py. As part of the initialisation, the hex records are parsed (slow) and the start address is determined as well as checksums being calculated
 
 ```
