@@ -18,7 +18,7 @@ OAD has 3 basic steps:
 ## How to use this class
 The FirmwareImage class assumes to be constructed with a string, that is essenctially the hex file that was produced as a result of hexmerge.py. As part of the initialisation, the hex records are parsed (slow) and the start address is determined as well as checksums being calculated
 
-```
+```swift
 // read hex file
 let data = Data(contentsOf: url)
 
@@ -29,7 +29,7 @@ let hex = String(data: hexData, encoding: String.Encoding.utf8)
 let img = FirmwareImage(file: hex)
 ```
 When you are ready to start the OAD process, you would first write the image meta information to the target, using the imgIdentifyRequestData() method. When the targets writes 0x000 to the block characteristic, its signals you to start the block transfer. You can now write blocks, using the nextBlock() method. 
-```
+```swift
 // generate header data
 let headerData = img.imgIdentifyRequestData()
 
