@@ -18,6 +18,36 @@ OAD has 3 basic steps:
 ## How to use these classes
 The FirmwareImage class assumes to be constructed with a string, that is essenctially the hex file that was produced as a result of hexmerge.py. As part of the initialisation, the hex records are parsed (slow) and the start address is determined as well as checksums being calculated
 
-When you are ready to start the OAD process, you would first write the image meta information to the target, using the imgIdentifyRequestData() method. When the targets writes 0x000 to the block characteristic, its signals you to start the block transfer. You can now write blocks, using the nextBlock() method. 
+```
+// read hex file
+let data = Data(contentsOf: url)
 
-Example usage is shown in the OADViewController
+// trun into string
+let hex = String(data: hexData, encoding: String.Encoding.utf8)
+
+// construct FirmwareImage
+let img = FirmwareImage(file: hex)
+```
+When you are ready to start the OAD process, you would first write the image meta information to the target, using the imgIdentifyRequestData() method. When the targets writes 0x000 to the block characteristic, its signals you to start the block transfer. You can now write blocks, using the nextBlock() method. 
+```
+// generate header data
+let headerData = img.imgIdentifyRequestData()
+
+// write header to peripheral
+peripheral.writeValue(headerData, for: oadCharacteristic, type: .withResponse)
+
+// now you can start writing the blocks. depending on your hardware combination, you may be able to send these
+// faster or slower than these defaults:
+let NUM_BLOCK_PER_CONNECTION = 2    // send 4, 16 byte blocks per connection
+let BLOCK_TRANSFER_INTERVAL  = 0.1  // every 100ms
+
+for _ in 0..<NUM_BLOCK_PER_CONNECTION {
+    if let blockData = img.nextBlock() {
+        peripheral.writeValue(blockData, for: blockChar, type: .withoutResponse)
+    } else {
+        // done or some block error
+    }
+}
+```
+
+_Note: you may or may not want to modify your OAD profile to send the next block index as a request to the iphone, and send only that block. This will make the process a lot more failsafe, but will slow things down._ 
