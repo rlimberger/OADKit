@@ -22,7 +22,7 @@ import Foundation
 //
 // This code was inspired by some of the OAD code in the Ti Android SensorTag app.
 
-class FirmwareImage : NSObject {
+final class FirmwareImage {
     
     // image header
     var crc0: Int = 0
@@ -55,31 +55,36 @@ class FirmwareImage : NSObject {
     }
     
     // initialize with a string, which is a hex file read from disc
-    init(file: String) {
-        super.init()
-        
-        // trun file string into array of lines
-        let lines = generateLines(string: file)
+    init(hexString: String) {
+        // truncate file string into array of lines
+        let lines = generateLines(string: hexString)
         
         // parse lines
         parseLines(lines: lines)
         
         // update header fields (start address was updated during the parse)
-        len = (data.count / (16 / 4))
+        len = data.count / (16 / 4)
         crc1 = Int(0xFFFF)
         crc0 = calcImageCRC(startPage: 0, data: data)
         
         // reset all counters
         resetProgress()
     }
-    
-    // TODO: initializer that takes a file path and handles the reading as well
-    //init(url: NSURL)
-    
+
+    convenience init?(url: URL) {
+        // read hex file & truncate into string
+        guard let hexData = try? Data(contentsOf: url),
+            let hex = String(data: hexData, encoding: .utf8) else {
+                return nil
+        }
+
+        self.init(hexString: hex)
+    }
+
     // reset counters
     func resetProgress() {
         iBlocks = 0
-        nBlocks = (len / (OAD_BLOCK_SIZE / HAL_FLASH_WORD_SIZE))
+        nBlocks = len / (OAD_BLOCK_SIZE / HAL_FLASH_WORD_SIZE)
     }
     
     // request the next block in the bin blob
@@ -111,8 +116,7 @@ class FirmwareImage : NSObject {
 
     // turn hex string into an array of records
     private func generateLines(string: String) -> [String] {
-        let newlineChars = NSCharacterSet.newlines
-        return string.components(separatedBy: newlineChars).filter{!$0.isEmpty}
+        return string.components(separatedBy: .newlines).filter { !$0.isEmpty }
     }
     
     // parse all records in the hex
@@ -131,7 +135,9 @@ class FirmwareImage : NSObject {
             
             // try to get record type
             let recordTypeStr = line[line.index(line.startIndex, offsetBy: 7)...line.index(line.startIndex, offsetBy: 8)]
-            guard let recordTypeInt = Int(recordTypeStr, radix: 16), let recordType = RecordType(rawValue: recordTypeInt) else { continue }
+            guard let recordTypeInt = Int(recordTypeStr, radix: 16),
+                let recordType = RecordType(rawValue: recordTypeInt)
+                else { continue }
             
             switch recordType {
             case .DATA:
@@ -201,7 +207,7 @@ class FirmwareImage : NSObject {
     func printHdr() {
         print("FwUpdateActivity_CC26xx ", "ImgHdr.len = ", len)
         print("FwUpdateActivity_CC26xx ", "ImgHdr.ver = ", ver)
-        print("FwUpdateActivity_CC26xx ", String(format: "ImgHdr.uid = 0x%02x%02x%02x%02x", uid[0], uid[1], uid[2], uid[3]));
+        print("FwUpdateActivity_CC26xx ", String(format: "ImgHdr.uid = 0x%02x%02x%02x%02x", uid[0], uid[1], uid[2], uid[3]))
         print("FwUpdateActivity_CC26xx ", "ImgHdr.addr = ", String(format: "0x%04x", UInt16(addr & 0xFFFF)))
         print("FwUpdateActivity_CC26xx ", "ImgHdr.imgType = ", imgType)
         print("FwUpdateActivity_CC26xx ", String(format: "ImgHdr.crc0 = 0x%04x", UInt16(crc0 & 0xFFFF)))
@@ -216,38 +222,39 @@ class FirmwareImage : NSObject {
         
         var page = startPage
         var pageEnd = (Int)(len / (0x1000 / 4))
-        let osetEnd = ((len - (pageEnd * (0x1000 / 4))) * 4)
+        let osetEnd = (len - (pageEnd * (0x1000 / 4))) * 4
         
         pageEnd += startPage
         
-        while (true) {
+        while true {
             var oset = 0
             while oset < 0x1000 {
-                if ((page == startPage) && (oset == 0x00)) {
+
+                if (page == startPage) && (oset == 0x00) {
+
                     //Skip the CRC and shadow.
                     //Note: this increments by 3 because oset is incremented by 1 in each pass
                     //through the loop
                     oset += 3
-                }
-                
-                else if ((page == pageEnd) && (oset == osetEnd)) {
+
+                } else if (page == pageEnd) && (oset == osetEnd) {
+
                     crc = crc16(startCrc: crc, startVal: 0x00)
                     crc = crc16(startCrc: crc, startVal: 0x00)
-        
-                    oset += 1
                     return crc
-                }
-                    
-                else {
-                    data.withUnsafeBytes {(bytes: UnsafePointer<UInt8>) in
+
+                } else {
+
+                    data.withUnsafeBytes { (bytes: UnsafePointer<UInt8>) in
                         crc = crc16(startCrc: crc, startVal: Int(bytes[Int(addr + oset)]))
                     }
                 }
+
+                oset += 1
             }
         
             page += 1
             addr = page * 0x1000
-            oset += 1
         }
     }
     
@@ -256,25 +263,23 @@ class FirmwareImage : NSObject {
         var val = startVal
         var crc = startCrc
         let poly = 0x1021
-        var cnt = 0;
-        
+
+        var cnt = 0
         while cnt < 8 {
             var msb = 0
             
-            if ((crc & 0x8000) == 0x8000) {
+            if (crc & 0x8000) == 0x8000 {
                 msb = 1
-            }
-            
-            else {
+            } else {
                 msb = 0
             }
             
             crc <<= 1
-            if ((val & 0x80) == 0x80) {
+            if (val & 0x80) == 0x80 {
                 crc |= 0x0001
             }
             
-            if (msb == 1) {
+            if msb == 1 {
                 crc ^= poly
             }
             
@@ -282,7 +287,7 @@ class FirmwareImage : NSObject {
             val <<= 1
         }
         
-        return crc;
+        return crc
     }
     
     // generate the image header data to identify with the OAD target
@@ -312,31 +317,36 @@ class FirmwareImage : NSObject {
 // source: http://stackoverflow.com/questions/26501276/converting-hex-string-to-nsdata-in-swift
 extension Data {
     func hexArrayString() -> String {
-        var str = "["
+        var str = ""
         var bytes = [UInt8](repeating: 0, count: count)
+
         copyBytes(to: &bytes, count: count)
+
         for b in bytes {
             str += String(format: "0x%02x, ", b)
         }
-        str += "]"
-        return str
+
+        return "[\(str)]"
     }
 }
 
 // source: http://stackoverflow.com/questions/26501276/converting-hex-string-to-nsdata-in-swift
 extension String {
     func dataFromHexString() -> Data? {
-        var hex = self.trimmingCharacters(in: CharacterSet(charactersIn: "<> ")).replacingOccurrences(of: " ", with: "")
-        
+        var hex = trimmingCharacters(in: CharacterSet(charactersIn: "<> ")).replacingOccurrences(of: " ", with: "")
         var data = Data()
-        while(hex.characters.count > 0) {
-            let c: String = hex.substring(to: hex.index(hex.startIndex, offsetBy: 2))
+
+        while hex.characters.count > 0 {
+            let c = hex.substring(to: hex.index(hex.startIndex, offsetBy: 2))
             hex = hex.substring(from: hex.index(hex.startIndex, offsetBy: 2))
+
             var ch: UInt32 = 0
             Scanner(string: c).scanHexInt32(&ch)
+
             var char = UInt8(ch)
             data.append(&char, count: 1)
         }
+
         return data
     }
 }
