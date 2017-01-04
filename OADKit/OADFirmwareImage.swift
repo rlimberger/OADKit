@@ -333,7 +333,8 @@ extension Data {
 // source: http://stackoverflow.com/questions/26501276/converting-hex-string-to-nsdata-in-swift
 extension String {
     func dataFromHexString() -> Data? {
-        var hex = trimmingCharacters(in: CharacterSet(charactersIn: "<> ")).replacingOccurrences(of: " ", with: "")
+        let trimmed = trimmingCharacters(in: CharacterSet(charactersIn: "<> "))
+        var hex = trimmed.replacingOccurrences(of: " ", with: "")
         var data = Data()
 
         while hex.characters.count > 0 {
