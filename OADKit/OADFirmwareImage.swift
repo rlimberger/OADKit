@@ -5,7 +5,7 @@
 
 import Foundation
 
-// This is a formware image generator for the Ti BLE OAD firmware update process
+// This is a firmware image generator for the Ti BLE OAD firmware update process
 // 
 // This image is constructed with a string, this string is assumed a "fullflash" hex image
 // that was read in by String(contentsOfURL: url), where url is the path to the fullflash kex image
@@ -22,19 +22,19 @@ import Foundation
 //
 // This code was inspired by some of the OAD code in the Ti Android SensorTag app.
 
-class FirmwareImage : NSObject {
+final class FirmwareImage {
     
     // image header
     var crc0: Int = 0
     var crc1: Int = 0
-    var ver: Int = 0
-    var len: Int = 0
-    let uid = [UInt8](count: 4, repeatedValue: 0x45)
+    var ver:  Int = 0
+    var len:  Int = 0
     var addr: UInt32 = 0
+    let uid = [UInt8](repeating: 0x45, count: 4)
     var imgType: ImgType = .EFL_OAD_IMG_TYPE_APP
     
     // image bin blob data
-    let data = NSMutableData()
+    var data = Data()
     
     // fixed assumptions made, using intel hex from hexmerge.py
     let OAD_BLOCK_SIZE = 16
@@ -44,7 +44,7 @@ class FirmwareImage : NSObject {
     var iBlocks = 0 // Number of blocks programmed
     var nBlocks = 0 // Total number of blocks
     
-    // from: https://en.wikipedia.org/wiki/Intel_HEX
+    // source: https://en.wikipedia.org/wiki/Intel_HEX
     enum RecordType: Int {
         case DATA = 0x00, EOF, EXT_SEG_ADDR, START_SEG_ADDR, EXT_LIN_ADDR, START_LIN_ADDR
     }
@@ -55,55 +55,60 @@ class FirmwareImage : NSObject {
     }
     
     // initialize with a string, which is a hex file read from disc
-    init(file: String) {
-        super.init()
-        
-        // trun file string into array of lines
-        let lines = generateLines(file)
+    init(hexString: String) {
+        // truncate file string into array of lines
+        let lines = generateLines(string: hexString)
         
         // parse lines
-        parseLines(lines)
+        parseLines(lines: lines)
         
         // update header fields (start address was updated during the parse)
-        len = (data.length / (16 / 4))
+        len = data.count / (16 / 4)
         crc1 = Int(0xFFFF)
-        crc0 = calcImageCRC(0, data: data)
+        crc0 = calcImageCRC(startPage: 0, data: data)
         
         // reset all counters
         resetProgress()
     }
-    
-    // TODO: initializer that takes a file path and handles the reading as well
-    //init(url: NSURL)
-    
+
+    convenience init?(url: URL) {
+        // read hex file & truncate into string
+        guard let hexData = try? Data(contentsOf: url),
+            let hex = String(data: hexData, encoding: .utf8) else {
+                return nil
+        }
+
+        self.init(hexString: hex)
+    }
+
     // reset counters
     func resetProgress() {
         iBlocks = 0
-        nBlocks = (len / (OAD_BLOCK_SIZE / HAL_FLASH_WORD_SIZE))
+        nBlocks = len / (OAD_BLOCK_SIZE / HAL_FLASH_WORD_SIZE)
     }
     
     // request the next block in the bin blob
-    func nextBlock() -> NSData? {
-        let b = block(iBlocks)
+    func nextBlock() -> Data? {
+        let b = block(blockNum: iBlocks)
         iBlocks += 1
         return b
     }
     
     // request a specific block
-    private func block(blockNum: Int) -> NSData? {
+    private func block(blockNum: Int) -> Data? {
         if blockNum < nBlocks {
             iBlocks = blockNum
             
-            var block = [UInt8](count: OAD_BLOCK_SIZE+2, repeatedValue: 0)
+            var block = [UInt8](repeating: 0, count: OAD_BLOCK_SIZE+2)
             
             block[0] = (UInt8(blockNum & 0xFF))
             block[1] = (UInt8((blockNum >> 8) & 0xFF))
             
-            let range = NSMakeRange(blockNum*OAD_BLOCK_SIZE, OAD_BLOCK_SIZE)
-            let subdata = data.subdataWithRange(range)
-            subdata.getBytes(&block[2], length: OAD_BLOCK_SIZE)
+            let range = Range(blockNum*OAD_BLOCK_SIZE..<blockNum*OAD_BLOCK_SIZE+OAD_BLOCK_SIZE)
+            let subdata = data.subdata(in: range)
+            subdata.copyBytes(to: &block[2], count: OAD_BLOCK_SIZE)
             
-            return NSData(bytes: block, length: block.count)
+            return Data(bytes: block, count: block.count)
         }
         
         return nil
@@ -111,8 +116,7 @@ class FirmwareImage : NSObject {
 
     // turn hex string into an array of records
     private func generateLines(string: String) -> [String] {
-        let newlineChars = NSCharacterSet.newlineCharacterSet()
-        return string.componentsSeparatedByCharactersInSet(newlineChars).filter{!$0.isEmpty}
+        return string.components(separatedBy: .newlines).filter { !$0.isEmpty }
     }
     
     // parse all records in the hex
@@ -126,24 +130,23 @@ class FirmwareImage : NSObject {
             guard line[line.startIndex] == ":" else { continue }
             
             // try to get the number of bytes in this line
-            let numBytesStr = line[line.startIndex.advancedBy(1)...line.startIndex.advancedBy(2)]
+            let numBytesStr = line[line.index(line.startIndex, offsetBy: 1)...line.index(line.startIndex, offsetBy: 2)]
             guard let numBytes = Int(numBytesStr, radix: 16) else { continue }
-            //print("numBytes:", numBytes)
             
             // try to get record type
-            let recordTypeStr = line[line.startIndex.advancedBy(7)...line.startIndex.advancedBy(8)]
-            guard let recordTypeInt = Int(recordTypeStr, radix: 16), recordType = RecordType(rawValue: recordTypeInt) else { continue }
-            //print("\nrecordType", recordType)
+            let recordTypeStr = line[line.index(line.startIndex, offsetBy: 7)...line.index(line.startIndex, offsetBy: 8)]
+            guard let recordTypeInt = Int(recordTypeStr, radix: 16),
+                let recordType = RecordType(rawValue: recordTypeInt)
+                else { continue }
             
             switch recordType {
             case .DATA:
                 // try to get 16bit block address
-                let blockAddrStr = line[line.startIndex.advancedBy(3)...line.startIndex.advancedBy(6)]
+                let blockAddrStr = line[line.index(line.startIndex, offsetBy: 3)...line.index(line.startIndex, offsetBy: 6)]
                 guard var blockAddr = UInt32(blockAddrStr, radix: 16) else { continue }
                 
                 // the block address in the line is relative to a previous base address record (if there was one)
                 blockAddr += currentAddressBase
-                //print("blockAddr:", String(format: "0x%04x", blockAddr))
                 
                 // if this is the very first data block address in the image, 
                 // this will be the address we report in the image header
@@ -153,43 +156,36 @@ class FirmwareImage : NSObject {
                 }
                 
                 // this is not the first address, check if we need to padd
-                if let currentAddress = currentAddress where currentAddress < blockAddr {
-                    //print("gap:", String(format: "0x%04x", currentAddress), "->",String(format: "0x%04x", blockAddr))
+                if let currentAddress = currentAddress, currentAddress < blockAddr {
                     let numPadBytes = Int(blockAddr-currentAddress)
-                    let padData = [UInt8](count: numPadBytes, repeatedValue: 0xFF)
-                    data.appendData(NSData(bytes: padData, length: padData.count))
-                    //print("padded with \(numPadBytes) bytes:"/*, padData*/)
+                    let padData = [UInt8](repeating: 0xFF, count: numPadBytes)
+                    data.append(Data(bytes: padData, count: padData.count))
                 }
                 
                 currentAddress = blockAddr
                 
-                // try to get the bytes as NsData
-                let lineDataStr = line[line.startIndex.advancedBy(9)..<line.startIndex.advancedBy(9+(numBytes*2))]
+                // try to get the bytes as Data
+                let lineDataStr = line[line.index(line.startIndex, offsetBy: 9)..<line.index(line.startIndex, offsetBy: (9+(numBytes*2)))]
                 guard let lineData = lineDataStr.dataFromHexString() else { continue }
-                //print("data:", lineData)
-                data.appendData(lineData)
-                currentAddress = currentAddress! + UInt32(lineData.length)
+                data.append(lineData as Data)
+                currentAddress = currentAddress! + UInt32(lineData.count)
                 
                 // we only support 16 byte blocks currently
                 // check that this block was 16 bytes, if not, pad 
-                if lineData.length < 16 {
-                    let numBytesToPad = 16-lineData.length
-                    let padData = [UInt8](count: numBytesToPad, repeatedValue: 0xFF)
-                    data.appendData(NSData(bytes: padData, length: padData.count))
+                if lineData.count < 16 {
+                    let numBytesToPad = 16-lineData.count
+                    let padData = [UInt8](repeating: 0xFF, count: numBytesToPad)
+                    data.append(Data(bytes: padData, count: padData.count))
                     currentAddress = currentAddress! + UInt32(padData.count)
                 }
                 
-                //print("added ", lineData.length, " bytes ", String(format: "0x%04x", currentAddress!))
-                
             case .EXT_LIN_ADDR:
                 // try to get ext seg 16bit address
-                let extLinAddrStr = line[line.startIndex.advancedBy(9)..<line.startIndex.advancedBy(9+4)]
+                let extLinAddrStr = line[line.index(line.startIndex, offsetBy: 9)..<line.index(line.startIndex, offsetBy: (9+4))]
                 guard var extLinAddr = UInt32(extLinAddrStr, radix: 16) else { continue }
                 extLinAddr <<= 16
-                //print("extLinAddr:", String(format: "0x%04x", extLinAddr))
                 // update current base address. all subsequent addresses are relative to this base address
                 currentAddressBase = extLinAddr
-                //print("baseAddressUpdate:", String(format: "0x%04x", currentAddressBase))
                 
             case .EOF:
                 break
@@ -211,7 +207,7 @@ class FirmwareImage : NSObject {
     func printHdr() {
         print("FwUpdateActivity_CC26xx ", "ImgHdr.len = ", len)
         print("FwUpdateActivity_CC26xx ", "ImgHdr.ver = ", ver)
-        print("FwUpdateActivity_CC26xx ", String(format: "ImgHdr.uid = 0x%02x%02x%02x%02x", uid[0], uid[1], uid[2], uid[3]));
+        print("FwUpdateActivity_CC26xx ", String(format: "ImgHdr.uid = 0x%02x%02x%02x%02x", uid[0], uid[1], uid[2], uid[3]))
         print("FwUpdateActivity_CC26xx ", "ImgHdr.addr = ", String(format: "0x%04x", UInt16(addr & 0xFFFF)))
         print("FwUpdateActivity_CC26xx ", "ImgHdr.imgType = ", imgType)
         print("FwUpdateActivity_CC26xx ", String(format: "ImgHdr.crc0 = 0x%04x", UInt16(crc0 & 0xFFFF)))
@@ -220,38 +216,41 @@ class FirmwareImage : NSObject {
     }
     
     // calculate CRC over the binary blob
-    private func calcImageCRC(startPage: Int, data: NSData) -> Int {
+    private func calcImageCRC(startPage: Int, data: Data) -> Int {
         var crc = 0
         var addr = startPage * 0x1000
         
         var page = startPage
         var pageEnd = (Int)(len / (0x1000 / 4))
-        let osetEnd = ((len - (pageEnd * (0x1000 / 4))) * 4)
+        let osetEnd = (len - (pageEnd * (0x1000 / 4))) * 4
         
         pageEnd += startPage
         
-        let bytes = UnsafePointer<UInt8>(data.bytes)
-        
-        while (true) {
+        while true {
             var oset = 0
-            for (oset=0; oset<0x1000; oset += 1) {
-                if ((page == startPage) && (oset == 0x00)) {
+            while oset < 0x1000 {
+
+                if (page == startPage) && (oset == 0x00) {
+
                     //Skip the CRC and shadow.
                     //Note: this increments by 3 because oset is incremented by 1 in each pass
                     //through the loop
                     oset += 3
-                }
-                
-                else if ((page == pageEnd) && (oset == osetEnd)) {
-                    crc = crc16(crc, startVal: 0x00)
-                    crc = crc16(crc, startVal: 0x00)
-        
+
+                } else if (page == pageEnd) && (oset == osetEnd) {
+
+                    crc = crc16(startCrc: crc, startVal: 0x00)
+                    crc = crc16(startCrc: crc, startVal: 0x00)
                     return crc
+
+                } else {
+
+                    data.withUnsafeBytes { (bytes: UnsafePointer<UInt8>) in
+                        crc = crc16(startCrc: crc, startVal: Int(bytes[Int(addr + oset)]))
+                    }
                 }
-                    
-                else {
-                    crc = crc16(crc, startVal: Int(bytes[Int(addr + oset)]))
-                }
+
+                oset += 1
             }
         
             page += 1
@@ -264,88 +263,92 @@ class FirmwareImage : NSObject {
         var val = startVal
         var crc = startCrc
         let poly = 0x1021
-        var cnt = 0;
-        
-        for (cnt = 0; cnt < 8; cnt += 1, val <<= 1) {
+
+        var cnt = 0
+        while cnt < 8 {
             var msb = 0
             
-            if ((crc & 0x8000) == 0x8000) {
+            if (crc & 0x8000) == 0x8000 {
                 msb = 1
-            }
-            
-            else {
+            } else {
                 msb = 0
             }
             
             crc <<= 1
-            if ((val & 0x80) == 0x80) {
+            if (val & 0x80) == 0x80 {
                 crc |= 0x0001
             }
             
-            if (msb == 1) {
+            if msb == 1 {
                 crc ^= poly
             }
+            
+            cnt += 1
+            val <<= 1
         }
         
-        return crc;
+        return crc
     }
     
     // generate the image header data to identify with the OAD target
-    func imgIdentifyRequestData() -> NSData {
-        let tmp = [
-            UInt8(crc0 & 0xFF),
-            UInt8((crc0 >> 8) & 0xFF),
-            UInt8(crc1 & 0xFF),
-            UInt8((crc1 >> 8) & 0xFF),
-            UInt8(ver & 0xFF),
-            UInt8((ver >> 8) & 0xFF),
-            UInt8(len & 0xFF),
-            UInt8((len >> 8) & 0xFF),
-            uid[0],
-            uid[1],
-            uid[2],
-            uid[3],
-            UInt8(addr & 0xFF),
-            UInt8((addr >> 8) & 0xFF),
-            UInt8(imgType.rawValue & 0xFF),
-            UInt8(0xFF)]
+    func imgIdentifyRequestData() -> Data {
+        var tmp = Array<UInt8>()
         
-        return NSData(bytes: tmp, length: tmp.count)
+        tmp.append(UInt8(crc0 & 0xFF))
+        tmp.append(UInt8((crc0 >> 8) & 0xFF))
+        tmp.append(UInt8(crc1 & 0xFF))
+        tmp.append(UInt8((crc1 >> 8) & 0xFF))
+        tmp.append(UInt8(ver & 0xFF))
+        tmp.append(UInt8((ver >> 8) & 0xFF))
+        tmp.append(UInt8(len & 0xFF))
+        tmp.append(UInt8((len >> 8) & 0xFF))
+        tmp.append(uid[0])
+        tmp.append(uid[1])
+        tmp.append(uid[2])
+        tmp.append(uid[3])
+        tmp.append(UInt8(addr & 0xFF))
+        tmp.append(UInt8((addr >> 8) & 0xFF))
+        tmp.append(UInt8(imgType.rawValue & 0xFF))
+        tmp.append(UInt8(0xFF))
+        
+        return Data(bytes: tmp, count: tmp.count)
     }
 }
 
-// from: http://stackoverflow.com/questions/26501276/converting-hex-string-to-nsdata-in-swift
-extension NSData {
+// source: http://stackoverflow.com/questions/26501276/converting-hex-string-to-nsdata-in-swift
+extension Data {
     func hexArrayString() -> String {
-        var str = "["
-        var bytes = [UInt8](count: length, repeatedValue: 0)
-        getBytes(&bytes, length: length)
+        var str = ""
+        var bytes = [UInt8](repeating: 0, count: count)
+
+        copyBytes(to: &bytes, count: count)
+
         for b in bytes {
             str += String(format: "0x%02x, ", b)
         }
-        str += "]"
-        return str
+
+        return "[\(str)]"
     }
 }
 
+// source: http://stackoverflow.com/questions/26501276/converting-hex-string-to-nsdata-in-swift
 extension String {
-    func dataFromHexString() -> NSData? {
-        let trimmedString = self.stringByTrimmingCharactersInSet(NSCharacterSet(charactersInString: "<> ")).stringByReplacingOccurrencesOfString(" ", withString: "")
-        let regex = try! NSRegularExpression(pattern: "^[0-9a-f]*$", options: .CaseInsensitive)
-        
-        let found = regex.firstMatchInString(trimmedString, options: [], range: NSMakeRange(0, trimmedString.characters.count))
-        if found == nil || found?.range.location == NSNotFound || trimmedString.characters.count % 2 != 0 {
-            return nil
+    func dataFromHexString() -> Data? {
+        let trimmed = trimmingCharacters(in: CharacterSet(charactersIn: "<> "))
+        var hex = trimmed.replacingOccurrences(of: " ", with: "")
+        var data = Data()
+
+        while hex.characters.count > 0 {
+            let c = hex.substring(to: hex.index(hex.startIndex, offsetBy: 2))
+            hex = hex.substring(from: hex.index(hex.startIndex, offsetBy: 2))
+
+            var ch: UInt32 = 0
+            Scanner(string: c).scanHexInt32(&ch)
+
+            var char = UInt8(ch)
+            data.append(&char, count: 1)
         }
-        
-        let data = NSMutableData(capacity: trimmedString.characters.count / 2)
-        
-        for var index = trimmedString.startIndex; index < trimmedString.endIndex; index = index.successor().successor() {
-            let byteString = trimmedString.substringWithRange(Range<String.Index>(start: index, end: index.successor().successor()))
-            let num = UInt8(byteString.withCString { strtoul($0, nil, 16) })
-            data?.appendBytes([num] as [UInt8], length: 1)
-        }
-        
+
         return data
     }
 }
