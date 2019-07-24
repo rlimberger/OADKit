@@ -166,7 +166,12 @@ final class FirmwareImage {
                 
                 // try to get the bytes as Data
                 let lineDataStr = line[line.index(line.startIndex, offsetBy: 9)..<line.index(line.startIndex, offsetBy: (9+(numBytes*2)))]
+                
+                // Guy: this is not going to work, but dataFromHexString does not exist - need to think how to fix
+                //let lineData = Data(lineDataStr.utf8)
+                
                 guard let lineData = lineDataStr.dataFromHexString() else { continue }
+                
                 data.append(lineData as Data)
                 currentAddress = currentAddress! + UInt32(lineData.count)
                 
