@@ -167,10 +167,8 @@ final class FirmwareImage {
                 // try to get the bytes as Data
                 let lineDataStr = line[line.index(line.startIndex, offsetBy: 9)..<line.index(line.startIndex, offsetBy: (9+(numBytes*2)))]
                 
-                // Guy: this is not going to work, but dataFromHexString does not exist - need to think how to fix
-                //let lineData = Data(lineDataStr.utf8)
-                
-                guard let lineData = lineDataStr.dataFromHexString() else { continue }
+                let str = String(lineDataStr)
+                guard let lineData = str.dataFromHexString() else { continue }
                 
                 data.append(lineData as Data)
                 currentAddress = currentAddress! + UInt32(lineData.count)
@@ -343,9 +341,13 @@ extension String {
         var hex = trimmed.replacingOccurrences(of: " ", with: "")
         var data = Data()
 
-        while hex.characters.count > 0 {
-            let c = hex.substring(to: hex.index(hex.startIndex, offsetBy: 2))
-            hex = hex.substring(from: hex.index(hex.startIndex, offsetBy: 2))
+        while hex.count > 0 {
+            let index = hex.index(hex.startIndex, offsetBy: 2)
+            let c = String(hex[..<index])
+            hex = String(hex[index...])
+            // let c = hex.substring(to: hex.index(hex.startIndex, offsetBy: 2))
+
+            //hex = hex.substring(from: hex.index(hex.startIndex, offsetBy: 2))
 
             var ch: UInt32 = 0
             Scanner(string: c).scanHexInt32(&ch)
