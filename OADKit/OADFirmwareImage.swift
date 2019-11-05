@@ -104,7 +104,7 @@ final class FirmwareImage {
             block[0] = (UInt8(blockNum & 0xFF))
             block[1] = (UInt8((blockNum >> 8) & 0xFF))
             
-            let range = Range(blockNum*OAD_BLOCK_SIZE..<blockNum*OAD_BLOCK_SIZE+OAD_BLOCK_SIZE)
+            let range = blockNum*OAD_BLOCK_SIZE..<blockNum*OAD_BLOCK_SIZE+OAD_BLOCK_SIZE
             let subdata = data.subdata(in: range)
             subdata.copyBytes(to: &block[2], count: OAD_BLOCK_SIZE)
             
