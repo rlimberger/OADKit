@@ -247,9 +247,10 @@ final class FirmwareImage {
                     return crc
 
                 } else {
-
-                    data.withUnsafeBytes { (bytes: UnsafePointer<UInt8>) in
-                        crc = crc16(startCrc: crc, startVal: Int(bytes[Int(addr + oset)]))
+                    
+                    data.withUnsafeBytes { bytes in
+                        let loc = Int(addr + oset)
+                        crc = crc16(startCrc: crc, startVal: Int(bytes[loc]))
                     }
                 }
 
@@ -349,8 +350,8 @@ extension String {
 
             //hex = hex.substring(from: hex.index(hex.startIndex, offsetBy: 2))
 
-            var ch: UInt32 = 0
-            Scanner(string: c).scanHexInt32(&ch)
+            var ch: UInt64 = 0
+            Scanner(string: c).scanHexInt64(&ch)
 
             var char = UInt8(ch)
             data.append(&char, count: 1)
